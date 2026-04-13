@@ -1,4 +1,3 @@
-
 # =============================================================================
 # SECTION 1: SETUP AND PACKAGE INSTALLATION
 # =============================================================================
@@ -50,22 +49,6 @@ data("PimaIndiansDiabetes2", package = "mlbench")
 # Create a working copy
 diabetes_data <- PimaIndiansDiabetes2
 
-# Display basic information
-cat("\nDataset Dimensions:\n")
-print(dim(diabetes_data))
-
-cat("\nFirst few rows:\n")
-print(head(diabetes_data))
-
-cat("\nData Structure:\n")
-print(str(diabetes_data))
-
-cat("\nSummary Statistics:\n")
-print(summary(diabetes_data))
-
-cat("\nMissing Values Count:\n")
-print(colSums(is.na(diabetes_data)))
-
 # Calculate percentage of missing values
 missing_pct <- colSums(is.na(diabetes_data)) / nrow(diabetes_data) * 100
 cat("\nPercentage of Missing Values:\n")
@@ -105,7 +88,7 @@ print(colSums(is.na(diabetes_complete)))
 cat("\nCreating additional features...\n")
 
 # BMI Categories (WHO Classification)
-diabetes_complete <- diabetes_complete %>%
+diabetes_complete <- diabetes_complete |>
   mutate(
     bmi_category = cut(mass,
                        breaks = c(0, 18.5, 25, 30, 35, 40, Inf),
@@ -161,8 +144,8 @@ for (var in continuous_vars) {
 cat("\n=== Correlation Analysis ===\n")
 
 # Calculate correlation matrix for numeric variables
-numeric_data <- diabetes_complete %>%
-  select(all_of(continuous_vars)) %>%
+numeric_data <- diabetes_complete |>
+  select(all_of(continuous_vars)) |>
   cor()
 
 cat("\nCorrelation Matrix:\n")
@@ -247,7 +230,7 @@ scatter_plot <- ggplot(diabetes_complete, aes(x = age, y = mass, color = diabete
 cat("\n=== PREPARING DATA FOR MODELING ===\n")
 
 # Select only numeric predictors for modeling
-model_data <- diabetes_complete %>%
+model_data <- diabetes_complete |>
   select(all_of(continuous_vars), diabetes)
 
 # Split data into training (70%) and testing (30%)
@@ -328,6 +311,7 @@ legend("bottomright",
        col = c("#A23B72", "#2E86AB"), lwd = 2, lty = c(1, 2))
 abline(a = 0, b = 1, lty = 2, col = "gray")
 dev.off()
+
 
 # =============================================================================
 # SECTION 8: MODEL BUILDING - LASSO REGRESSION
@@ -510,7 +494,7 @@ model_comparison <- data.frame(
     auc(rf_test_roc)
   )
 )
-
+# IMPORTANT #
 cat("\nModel Performance Comparison:\n")
 print(model_comparison)
 
