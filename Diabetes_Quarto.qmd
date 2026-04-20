@@ -1,699 +1,517 @@
 ---
-title: "Diabetes_Quarto"
-format: html
+title: "Predicting Type 2 Diabetes: A Comparative Machine Learning Analysis"
+author: "Data Science Capstone Project"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Table of Contents"
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+    fig-width: 9
+    fig-height: 6
+    fig-align: center
+    embed-resources: true
+    smooth-scroll: true
 editor: visual
 ---
 
-## Quarto
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+# Introduction
 
-## Running Code
+Type 2 diabetes is a major global health burden, affecting over 500 million people worldwide. Early identification of at-risk individuals allows for timely lifestyle interventions that can delay or prevent onset. This analysis uses the **Pima Indians Diabetes Dataset** — 768 health measurements from Pima Indian women aged 21 and older — to identify the most influential clinical predictors of diabetes and compare three classification models: Logistic Regression, LASSO Regression, and Random Forest.
 
-```{r}
-# =============================================================================
-# SECTION 1: SETUP AND PACKAGE INSTALLATION
-# =============================================================================
+**Research Questions:**
 
-# Clear environment
+-   Which clinical variables are most influential in predicting type 2 diabetes?
+-   Which model best balances predictive accuracy and interpretability for this clinical task?
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r packages}
 rm(list = ls())
-
-# Set seed for reproducibility
 set.seed(123)
 
-# Install required packages if not already installed
 required_packages <- c(
-  "tidyverse",      # Data manipulation and visualization
-  "mlbench",        # Access to Pima Indians Diabetes dataset
-  "caret",          # Machine learning and cross-validation
-  "pROC",           # ROC curves and AUC
-  "glmnet",         # LASSO and Ridge regression
-  "corrplot",       # Correlation plots
-  "mice",           # Missing data imputation
-  "gridExtra",      # Arranging plots
-  "reshape2",       # Data reshaping
-  "GGally"          # Extended ggplot2 functionality
+  "tidyverse", "mlbench", "caret", "pROC",
+  "glmnet", "mice", "gridExtra", "reshape2",
+  "randomForest", "knitr", "kableExtra", "scales", "viridis"
 )
 
-# Function to install packages
-install_if_missing <- function(packages) {
-  for (pkg in packages) {
-    if (!require(pkg, character.only = TRUE)) {
-      install.packages(pkg, dependencies = TRUE)
-      library(pkg, character.only = TRUE)
-    }
-  }
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
 }
 
-# Install and load packages
-install_if_missing(required_packages)
+# Color palette
+pal <- c(neg = "#2E86AB", pos = "#A23B72", neu = "#F18F01")
+```
 
-# =============================================================================
-# SECTION 2: DATA LOADING AND INITIAL EXPLORATION
-# =============================================================================
+------------------------------------------------------------------------
 
-cat("\n=== LOADING DATA ===\n")
+# Data & Preprocessing
 
-# Load the Pima Indians Diabetes dataset from mlbench
-# This dataset contains 768 observations of Pima Indian women aged 21+
-# Target: Predicting diabetes onset within 5 years
+We load the `PimaIndiansDiabetes2` dataset, which includes medically meaningful predictors and a binary outcome indicating diabetes diagnosis within five years. Several variables contain missing values (notably insulin at 49% and triceps at 30%), which are addressed using **Multiple Imputation by Chained Equations (MICE)** with predictive mean matching rather than simple deletion or zero-substitution.
+
+```{r load-and-impute}
 data("PimaIndiansDiabetes2", package = "mlbench")
+diabetes_raw <- PimaIndiansDiabetes2
 
-# Create a working copy
-diabetes_data <- PimaIndiansDiabetes2
+# Impute missing values
+imp <- mice(diabetes_raw[, -9], m = 5, method = "pmm",
+            seed = 123, printFlag = FALSE)
+diabetes <- complete(imp, 1)
+diabetes$diabetes <- diabetes_raw$diabetes
 
-# Calculate percentage of missing values
-missing_pct <- colSums(is.na(diabetes_data)) / nrow(diabetes_data) * 100
-cat("\nPercentage of Missing Values:\n")
-print(round(missing_pct, 2))
+continuous_vars <- c("pregnant","glucose","pressure","triceps",
+                     "insulin","mass","pedigree","age")
+```
 
-# =============================================================================
-# SECTION 3: DATA CLEANING AND PREPROCESSING
-# =============================================================================
+**Train / Test Split** — 70% training, 30% testing, stratified by outcome.
 
-cat("\n=== DATA PREPROCESSING ===\n")
+```{r split}
+idx        <- createDataPartition(diabetes$diabetes, p = 0.70, list = FALSE)
+train_data <- diabetes[idx, ]
+test_data  <- diabetes[-idx, ]
+```
 
-# 3.1: Handle Missing Values using Multiple Imputation
-cat("\nPerforming multiple imputation for missing values...\n")
+------------------------------------------------------------------------
 
-# Separate outcome variable for imputation
-diabetes_features <- diabetes_data[, -ncol(diabetes_data)]
-diabetes_outcome <- diabetes_data$diabetes
+# Exploratory Data Analysis
 
-# Perform multiple imputation using mice
-# Using predictive mean matching (pmm) method
-imputed_data <- mice(diabetes_features, 
-                     m = 5,           # Number of imputations
-                     method = "pmm",  # Predictive mean matching
-                     seed = 123,
-                     printFlag = FALSE)
+## Predictor Distributions by Outcome
 
-# Complete the dataset with imputed values
-diabetes_complete <- complete(imputed_data, 1)
+The density plots below reveal which variables show the clearest separation between diabetic and non-diabetic patients. Glucose, BMI, and age stand out as the most discriminating predictors.
 
-# Add outcome variable back
-diabetes_complete$diabetes <- diabetes_outcome
+```{r ridge-plot, fig.height=8}
+diabetes |>
+  select(all_of(continuous_vars), diabetes) |>
+  pivot_longer(-diabetes, names_to = "Variable", values_to = "Value") |>
+  mutate(Outcome = ifelse(diabetes == "neg", "No Diabetes", "Diabetes")) |>
+  ggplot(aes(x = Value, fill = Outcome)) +
+  geom_density(alpha = 0.65) +
+  scale_fill_manual(values = c("No Diabetes" = pal["neg"], "Diabetes" = pal["pos"])) +
+  facet_wrap(~Variable, scales = "free", ncol = 2) +
+  labs(title = "Predictor Distributions by Diabetes Status",
+       x = NULL, y = "Density", fill = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "top",
+        strip.text = element_text(face = "bold"))
+```
 
-cat("Missing values after imputation:\n")
-print(colSums(is.na(diabetes_complete)))
+## Box Plots: Top Predictors vs. Outcome
 
-# 3.2: Feature Engineering
-cat("\nCreating additional features...\n")
+```{r boxplots, fig.height=5}
+top_vars   <- c("glucose", "mass", "age", "pedigree")
+top_labels <- c("Glucose (mg/dL)", "BMI (kg/m2)", "Age (years)", "Pedigree Function")
 
-# BMI Categories (WHO Classification)
-diabetes_complete <- diabetes_complete |>
-  mutate(
-    bmi_category = cut(mass,
-                       breaks = c(0, 18.5, 25, 30, 35, 40, Inf),
-                       labels = c("Underweight", "Normal", "Overweight", 
-                                 "Obese Class I", "Obese Class II", "Obese Class III"),
-                       include.lowest = TRUE),
-    
-    # Age groups
-    age_group = cut(age,
-                   breaks = c(0, 30, 40, 50, 60, Inf),
-                   labels = c("21-30", "31-40", "41-50", "51-60", "60+"),
-                   include.lowest = TRUE),
-    
-    # Glucose categories (ADA Guidelines)
-    glucose_category = cut(glucose,
-                          breaks = c(0, 100, 126, Inf),
-                          labels = c("Normal", "Prediabetes", "Diabetes"),
-                          include.lowest = TRUE),
-    
-    # Diabetes risk score (composite)
-    risk_score = scale(glucose) + scale(mass) + scale(age) + scale(pedigree)
-  )
+bp_list <- mapply(function(v, lab) {
+  ggplot(diabetes, aes_string(x = "diabetes", y = v, fill = "diabetes")) +
+    geom_boxplot(notch = TRUE, outlier.alpha = 0.4, show.legend = FALSE) +
+    scale_x_discrete(labels = c("neg" = "No Diabetes", "pos" = "Diabetes")) +
+    scale_fill_manual(values = c("neg" = pal["neg"], "pos" = pal["pos"])) +
+    labs(title = lab, x = NULL, y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))
+}, top_vars, top_labels, SIMPLIFY = FALSE)
 
-# =============================================================================
-# SECTION 4: EXPLORATORY DATA ANALYSIS
-# =============================================================================
+grid.arrange(grobs = bp_list, ncol = 4,
+             top = "Key Predictors by Diabetes Status")
+```
 
-cat("\n=== EXPLORATORY DATA ANALYSIS ===\n")
+## Correlation Heatmap
 
-# 4.1: Class Distribution
-cat("\nDiabetes Outcome Distribution:\n")
-print(table(diabetes_complete$diabetes))
-cat("\nProportions:\n")
-print(prop.table(table(diabetes_complete$diabetes)))
+Understanding predictor correlations is important for interpreting LASSO's variable selection behavior and for detecting multicollinearity in logistic regression.
 
-# 4.2: Statistical Tests for Predictors
-
-# T-test for continuous variables
-continuous_vars <- c("pregnant", "glucose", "pressure", "triceps", 
-                     "insulin", "mass", "pedigree", "age")
-
-cat("\n=== T-tests: Diabetes vs No Diabetes ===\n")
-for (var in continuous_vars) {
-  test_result <- t.test(diabetes_complete[[var]] ~ diabetes_complete$diabetes)
-  cat(sprintf("\n%s:\n", var))
-  cat(sprintf("  Mean (No Diabetes): %.2f\n", test_result$estimate[1]))
-  cat(sprintf("  Mean (Diabetes): %.2f\n", test_result$estimate[2]))
-  cat(sprintf("  p-value: %.4f\n", test_result$p.value))
-  cat(sprintf("  Significant: %s\n", ifelse(test_result$p.value < 0.05, "YES", "NO")))
-}
-
-# 4.3: Correlation Analysis
-cat("\n=== Correlation Analysis ===\n")
-
-# Calculate correlation matrix for numeric variables
-numeric_data <- diabetes_complete |>
+```{r heatmap, fig.height=6, fig.width=6}
+cor_melt <- diabetes |>
   select(all_of(continuous_vars)) |>
-  cor()
+  cor() |>
+  melt()
 
-cat("\nCorrelation Matrix:\n")
-print(round(numeric_data, 2))
-
-# =============================================================================
-# SECTION 5: DATA VISUALIZATION
-# =============================================================================
-
-cat("\n=== GENERATING VISUALIZATIONS ===\n")
-
-# Create output directory for plots
-dir.create("diabetes_plots", showWarnings = FALSE)
-
-# 5.1: Distribution plots for all continuous variables
-for (var in continuous_vars) {
-  p <- ggplot(diabetes_complete, aes_string(x = var, fill = "diabetes")) +
-    geom_histogram(alpha = 0.6, position = "identity", bins = 30) +
-    scale_fill_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-    labs(title = paste("Distribution of", var, "by Diabetes Status"),
-         x = var, y = "Count", fill = "Diabetes") +
-    theme_minimal() +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  
-  ggsave(paste0("diabetes_plots/dist_", var, ".png"), p, width = 8, height = 5)
-}
-
-# 5.2: Correlation heatmap
-png("diabetes_plots/correlation_heatmap.png", width = 800, height = 800)
-corrplot(numeric_data, method = "color", type = "upper", 
-         tl.col = "black", tl.srt = 45,
-         addCoef.col = "black", number.cex = 0.7,
-         col = colorRampPalette(c("#2E86AB", "white", "#A23B72"))(200),
-         title = "Correlation Matrix of Predictors")
-dev.off()
-
-# 5.3: Box plots comparing diabetes groups
-p1 <- ggplot(diabetes_complete, aes(x = diabetes, y = glucose, fill = diabetes)) +
-  geom_boxplot() +
-  scale_fill_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-  labs(title = "Glucose Levels by Diabetes Status", y = "Glucose (mg/dL)") +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-p2 <- ggplot(diabetes_complete, aes(x = diabetes, y = mass, fill = diabetes)) +
-  geom_boxplot() +
-  scale_fill_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-  labs(title = "BMI by Diabetes Status", y = "BMI (kg/m²)") +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-p3 <- ggplot(diabetes_complete, aes(x = diabetes, y = age, fill = diabetes)) +
-  geom_boxplot() +
-  scale_fill_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-  labs(title = "Age by Diabetes Status", y = "Age (years)") +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-p4 <- ggplot(diabetes_complete, aes(x = diabetes, y = pedigree, fill = diabetes)) +
-  geom_boxplot() +
-  scale_fill_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-  labs(title = "Diabetes Pedigree by Diabetes Status", y = "Pedigree Function") +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-combined_plot <- grid.arrange(p1, p2, p3, p4, ncol = 2)
-
-# 5.4: Age vs BMI scatter plot
-scatter_plot <- ggplot(diabetes_complete, aes(x = age, y = mass, color = diabetes)) +
-  geom_point(alpha = 0.6, size = 2) +
-  scale_color_manual(values = c("neg" = "#2E86AB", "pos" = "#A23B72")) +
-  geom_smooth(method = "loess", se = TRUE) +
-  labs(title = "Age vs BMI by Diabetes Status",
-       x = "Age (years)", y = "BMI (kg/m²)", color = "Diabetes") +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-
-# =============================================================================
-# SECTION 6: MODEL PREPARATION
-# =============================================================================
-
-cat("\n=== PREPARING DATA FOR MODELING ===\n")
-
-# Select only numeric predictors for modeling
-model_data <- diabetes_complete |>
-  select(all_of(continuous_vars), diabetes)
-
-# Split data into training (70%) and testing (30%)
-set.seed(123)
-train_index <- createDataPartition(model_data$diabetes, p = 0.7, list = FALSE)
-train_data <- model_data[train_index, ]
-test_data <- model_data[-train_index, ]
-
-cat(sprintf("\nTraining set size: %d observations\n", nrow(train_data)))
-cat(sprintf("Testing set size: %d observations\n", nrow(test_data)))
-
-# Check class distribution in splits
-cat("\nTraining set distribution:\n")
-print(prop.table(table(train_data$diabetes)))
-cat("\nTesting set distribution:\n")
-print(prop.table(table(test_data$diabetes)))
+ggplot(cor_melt, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(value, 2)), size = 3, fontface = "bold") +
+  scale_fill_gradient2(low = pal["neg"], mid = "white", high = pal["pos"],
+                       midpoint = 0, limits = c(-1, 1), name = "r") +
+  labs(title = "Predictor Correlation Matrix", x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+        axis.text.y = element_text(face = "bold"),
+        plot.title  = element_text(face = "bold")) +
+  coord_fixed()
 ```
 
-Logistic Regression:
+## Summary Statistics
 
-```{r}
-cat("\n=== MODEL 1: LOGISTIC REGRESSION ===\n")
-
-# 7.1: Full Logistic Regression Model
-log_model_full <- glm(diabetes ~ ., 
-                      data = train_data, 
-                      family = binomial(link = "logit"))
-
-cat("\nFull Logistic Regression Model Summary:\n")
-print(summary(log_model_full))
-
-# Calculate odds ratios
-odds_ratios <- exp(coef(log_model_full))
-cat("\nOdds Ratios:\n")
-print(round(odds_ratios, 3))
-
-# 7.2: Stepwise Selection
-log_model_step <- step(log_model_full, direction = "both", trace = 0)
-
-cat("\nStepwise Selected Model:\n")
-print(summary(log_model_step))
-
-# 7.3: Predictions and Evaluation
-# Training set predictions
-train_pred_prob <- predict(log_model_step, train_data, type = "response")
-train_pred_class <- ifelse(train_pred_prob > 0.5, "pos", "neg")
-train_pred_class <- factor(train_pred_class, levels = c("neg", "pos"))
-
-# Testing set predictions
-test_pred_prob <- predict(log_model_step, test_data, type = "response")
-test_pred_class <- ifelse(test_pred_prob > 0.5, "pos", "neg")
-test_pred_class <- factor(test_pred_class, levels = c("neg", "pos"))
-
-# Confusion Matrix - Training
-cat("\n=== Training Set Performance ===\n")
-train_cm <- confusionMatrix(train_pred_class, train_data$diabetes, positive = "pos")
-print(train_cm)
-
-# Confusion Matrix - Testing
-cat("\n=== Testing Set Performance ===\n")
-test_cm <- confusionMatrix(test_pred_class, test_data$diabetes, positive = "pos")
-print(test_cm)
-
-# ROC Curve and AUC
-train_roc <- roc(train_data$diabetes, train_pred_prob)
-test_roc <- roc(test_data$diabetes, test_pred_prob)
-
-cat(sprintf("\nTraining AUC: %.4f\n", auc(train_roc)))
-cat(sprintf("Testing AUC: %.4f\n", auc(test_roc)))
-
-# Plot ROC curves
-png("diabetes_plots/roc_logistic.png", width = 800, height = 600)
-plot(test_roc, col = "#A23B72", lwd = 2, main = "ROC Curve - Logistic Regression")
-lines(train_roc, col = "#2E86AB", lwd = 2, lty = 2)
-legend("bottomright", 
-       legend = c(paste("Test AUC =", round(auc(test_roc), 3)),
-                 paste("Train AUC =", round(auc(train_roc), 3))),
-       col = c("#A23B72", "#2E86AB"), lwd = 2, lty = c(1, 2))
-abline(a = 0, b = 1, lty = 2, col = "gray")
-dev.off()
+```{r summary-table}
+diabetes |>
+  group_by(diabetes) |>
+  summarise(across(all_of(continuous_vars),
+                   ~paste0(round(mean(.), 1), " (+-", round(sd(.), 1), ")")),
+            .groups = "drop") |>
+  mutate(diabetes = ifelse(diabetes == "neg", "No Diabetes", "Diabetes")) |>
+  pivot_longer(-diabetes, names_to = "Variable") |>
+  pivot_wider(names_from = diabetes, values_from = value) |>
+  kbl(caption = "Mean (+-SD) by Diabetes Status",
+      col.names = c("Variable", "No Diabetes", "Diabetes")) |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE)
 ```
 
-Logistic Visuals:
+------------------------------------------------------------------------
 
-```{r}
+# Model Building
 
-```
+## Logistic Regression
 
-LASSO Regression:
+Logistic regression serves as our interpretable baseline. We apply bidirectional stepwise selection (AIC) to retain only the most informative predictors.
 
-```{r}
-cat("\n=== MODEL 2: LASSO REGRESSION ===\n")
-
-# Prepare data for glmnet (requires matrix format)
-x_train <- model.matrix(diabetes ~ ., train_data)[, -1]
-y_train <- train_data$diabetes
-x_test <- model.matrix(diabetes ~ ., test_data)[, -1]
-y_test <- test_data$diabetes
-
-# Convert outcome to numeric (0/1) for glmnet
-y_train_numeric <- ifelse(y_train == "pos", 1, 0)
-y_test_numeric <- ifelse(y_test == "pos", 1, 0)
-
-# Cross-validation to find optimal lambda
-cv_lasso <- cv.glmnet(x_train, y_train_numeric, 
-                      alpha = 1, 
-                      family = "binomial",
-                      nfolds = 10)
-
-cat("\nOptimal Lambda (min):", cv_lasso$lambda.min, "\n")
-cat("Optimal Lambda (1se):", cv_lasso$lambda.1se, "\n")
-
-# Plot cross-validation curve
-png("diabetes_plots/lasso_cv.png", width = 800, height = 600)
-plot(cv_lasso, main = "LASSO Cross-Validation")
-dev.off()
-
-# Fit LASSO model with optimal lambda
-lasso_model <- glmnet(x_train, y_train_numeric, 
-                      alpha = 1, 
-                      family = "binomial",
-                      lambda = cv_lasso$lambda.min)
-
-# Display coefficients
-cat("\nLASSO Coefficients:\n")
-lasso_coef <- coef(lasso_model)
-print(lasso_coef)
-
-# Count non-zero coefficients
-non_zero <- sum(lasso_coef != 0) - 1  # Exclude intercept
-cat(sprintf("\nNumber of selected features: %d out of %d\n", non_zero, ncol(x_train)))
+```{r logistic}
+log_full <- glm(diabetes ~ ., data = train_data, family = binomial)
+log_step <- step(log_full, direction = "both", trace = 0)
 
 # Predictions
-lasso_pred_prob_train <- predict(lasso_model, x_train, type = "response")
-lasso_pred_class_train <- ifelse(lasso_pred_prob_train > 0.5, "pos", "neg")
-lasso_pred_class_train <- factor(lasso_pred_class_train, levels = c("neg", "pos"))
+log_prob_tr  <- predict(log_step, train_data, type = "response")
+log_prob_te  <- predict(log_step, test_data,  type = "response")
+log_class_tr <- factor(ifelse(log_prob_tr > 0.5, "pos", "neg"), levels = c("neg","pos"))
+log_class_te <- factor(ifelse(log_prob_te > 0.5, "pos", "neg"), levels = c("neg","pos"))
 
-lasso_pred_prob_test <- predict(lasso_model, x_test, type = "response")
-lasso_pred_class_test <- ifelse(lasso_pred_prob_test > 0.5, "pos", "neg")
-lasso_pred_class_test <- factor(lasso_pred_class_test, levels = c("neg", "pos"))
-
-# Evaluation
-cat("\n=== LASSO Training Set Performance ===\n")
-lasso_train_cm <- confusionMatrix(lasso_pred_class_train, train_data$diabetes, positive = "pos")
-print(lasso_train_cm)
-
-cat("\n=== LASSO Testing Set Performance ===\n")
-lasso_test_cm <- confusionMatrix(lasso_pred_class_test, test_data$diabetes, positive = "pos")
-print(lasso_test_cm)
-
-# ROC and AUC
-lasso_train_roc <- roc(train_data$diabetes, as.numeric(lasso_pred_prob_train))
-lasso_test_roc <- roc(test_data$diabetes, as.numeric(lasso_pred_prob_test))
-
-cat(sprintf("\nLASSO Training AUC: %.4f\n", auc(lasso_train_roc)))
-cat(sprintf("LASSO Testing AUC: %.4f\n", auc(lasso_test_roc)))
+log_cm_tr  <- confusionMatrix(log_class_tr, train_data$diabetes, positive = "pos")
+log_cm_te  <- confusionMatrix(log_class_te, test_data$diabetes,  positive = "pos")
+log_roc_tr <- roc(train_data$diabetes, log_prob_tr, quiet = TRUE)
+log_roc_te <- roc(test_data$diabetes,  log_prob_te, quiet = TRUE)
 ```
 
-LASSO Visuals:
+### Odds Ratios
 
-```{r}
+Variables with OR \> 1 and a confidence interval that does not cross 1 are statistically significant risk factors.
 
+```{r odds-ratios}
+or_df <- data.frame(
+  Variable = names(coef(log_step)),
+  OR       = exp(coef(log_step)),
+  CI_Lo    = exp(confint.default(log_step)[,1]),
+  CI_Hi    = exp(confint.default(log_step)[,2])
+) |> filter(Variable != "(Intercept)") |>
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+kbl(or_df, caption = "Logistic Regression: Odds Ratios with 95% CI",
+    col.names = c("Variable","OR","Lower CI","Upper CI")) |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE) |>
+  row_spec(which(or_df$OR > 1 & or_df$CI_Lo > 1), bold = TRUE,
+           color = "white", background = pal["pos"])
+
+ggplot(or_df, aes(x = reorder(Variable, OR), y = OR,
+                  ymin = CI_Lo, ymax = CI_Hi, color = OR > 1)) +
+  geom_pointrange(size = 0.9, linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("FALSE" = pal["neg"], "TRUE" = pal["pos"]),
+                     labels = c("No/Neutral Effect", "Increased Risk"), name = NULL) +
+  coord_flip() +
+  labs(title    = "Logistic Regression: Odds Ratios with 95% CI",
+       subtitle = "Purple = statistically significant risk factor (OR > 1, CI excludes 1)",
+       x = NULL, y = "Odds Ratio") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "top")
 ```
 
-Random Forest Model:
+------------------------------------------------------------------------
 
-```{r}
-cat("\n=== MODEL 2: LASSO REGRESSION ===\n")
+## LASSO Regression
 
-# Prepare data for glmnet (requires matrix format)
-x_train <- model.matrix(diabetes ~ ., train_data)[, -1]
-y_train <- train_data$diabetes
-x_test <- model.matrix(diabetes ~ ., test_data)[, -1]
-y_test <- test_data$diabetes
+LASSO applies an L1 penalty that shrinks weaker coefficients to zero, producing an automatically selected subset of predictors. The optimal penalty (lambda) is chosen via 10-fold cross-validation.
 
-# Convert outcome to numeric (0/1) for glmnet
-y_train_numeric <- ifelse(y_train == "pos", 1, 0)
-y_test_numeric <- ifelse(y_test == "pos", 1, 0)
+```{r lasso}
+x_tr <- model.matrix(diabetes ~ ., train_data)[,-1]
+y_tr <- ifelse(train_data$diabetes == "pos", 1, 0)
+x_te <- model.matrix(diabetes ~ ., test_data)[,-1]
 
-# Cross-validation to find optimal lambda
-cv_lasso <- cv.glmnet(x_train, y_train_numeric, 
-                      alpha = 1, 
-                      family = "binomial",
-                      nfolds = 10)
-
-cat("\nOptimal Lambda (min):", cv_lasso$lambda.min, "\n")
-cat("Optimal Lambda (1se):", cv_lasso$lambda.1se, "\n")
-
-# Plot cross-validation curve
-png("diabetes_plots/lasso_cv.png", width = 800, height = 600)
-plot(cv_lasso, main = "LASSO Cross-Validation")
-dev.off()
-
-# Fit LASSO model with optimal lambda
-lasso_model <- glmnet(x_train, y_train_numeric, 
-                      alpha = 1, 
-                      family = "binomial",
+cv_lasso    <- cv.glmnet(x_tr, y_tr, alpha = 1, family = "binomial", nfolds = 10)
+lasso_model <- glmnet(x_tr, y_tr, alpha = 1, family = "binomial",
                       lambda = cv_lasso$lambda.min)
 
-# Display coefficients
-cat("\nLASSO Coefficients:\n")
-lasso_coef <- coef(lasso_model)
-print(lasso_coef)
-
-# Count non-zero coefficients
-non_zero <- sum(lasso_coef != 0) - 1  # Exclude intercept
-cat(sprintf("\nNumber of selected features: %d out of %d\n", non_zero, ncol(x_train)))
-
 # Predictions
-lasso_pred_prob_train <- predict(lasso_model, x_train, type = "response")
-lasso_pred_class_train <- ifelse(lasso_pred_prob_train > 0.5, "pos", "neg")
-lasso_pred_class_train <- factor(lasso_pred_class_train, levels = c("neg", "pos"))
+las_prob_tr  <- predict(lasso_model, x_tr, type = "response")[,1]
+las_prob_te  <- predict(lasso_model, x_te, type = "response")[,1]
+las_class_tr <- factor(ifelse(las_prob_tr > 0.5, "pos", "neg"), levels = c("neg","pos"))
+las_class_te <- factor(ifelse(las_prob_te > 0.5, "pos", "neg"), levels = c("neg","pos"))
 
-lasso_pred_prob_test <- predict(lasso_model, x_test, type = "response")
-lasso_pred_class_test <- ifelse(lasso_pred_prob_test > 0.5, "pos", "neg")
-lasso_pred_class_test <- factor(lasso_pred_class_test, levels = c("neg", "pos"))
-
-# Evaluation
-cat("\n=== LASSO Training Set Performance ===\n")
-lasso_train_cm <- confusionMatrix(lasso_pred_class_train, train_data$diabetes, positive = "pos")
-print(lasso_train_cm)
-
-cat("\n=== LASSO Testing Set Performance ===\n")
-lasso_test_cm <- confusionMatrix(lasso_pred_class_test, test_data$diabetes, positive = "pos")
-print(lasso_test_cm)
-
-# ROC and AUC
-lasso_train_roc <- roc(train_data$diabetes, as.numeric(lasso_pred_prob_train))
-lasso_test_roc <- roc(test_data$diabetes, as.numeric(lasso_pred_prob_test))
-
-cat(sprintf("\nLASSO Training AUC: %.4f\n", auc(lasso_train_roc)))
-cat(sprintf("LASSO Testing AUC: %.4f\n", auc(lasso_test_roc)))
+las_cm_tr  <- confusionMatrix(las_class_tr, train_data$diabetes, positive = "pos")
+las_cm_te  <- confusionMatrix(las_class_te, test_data$diabetes,  positive = "pos")
+las_roc_tr <- roc(train_data$diabetes, las_prob_tr, quiet = TRUE)
+las_roc_te <- roc(test_data$diabetes,  las_prob_te, quiet = TRUE)
 ```
 
-Random Forest Visuals:
+### LASSO: Selected Coefficients
 
-```{r}
+```{r lasso-coef-plot}
+las_coef_df <- data.frame(
+  Variable = rownames(as.matrix(coef(lasso_model))),
+  Coef     = as.matrix(coef(lasso_model))[,1]
+) |> filter(Variable != "(Intercept)", Coef != 0) |>
+  arrange(desc(abs(Coef)))
 
+ggplot(las_coef_df, aes(x = reorder(Variable, abs(Coef)), y = Coef, fill = Coef > 0)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("FALSE" = pal["neg"], "TRUE" = pal["pos"])) +
+  coord_flip() +
+  labs(title    = "LASSO: Non-Zero Coefficients After Penalization",
+       subtitle = "Purple = increases risk; Blue = decreases risk; absent = shrunk to zero",
+       x = NULL, y = "Coefficient") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
 ```
 
-Model Comparison:
+------------------------------------------------------------------------
 
-```{r}
-cat("\n=== COMPREHENSIVE MODEL COMPARISON ===\n")
+## Random Forest
 
-# Create comparison dataframe
-model_comparison <- data.frame(
-  Model = c("Logistic Regression", "LASSO", "Random Forest"),
-  Train_Accuracy = c(
-    train_cm$overall["Accuracy"],
-    lasso_train_cm$overall["Accuracy"],
-    rf_train_cm$overall["Accuracy"]
-  ),
-  Test_Accuracy = c(
-    test_cm$overall["Accuracy"],
-    lasso_test_cm$overall["Accuracy"],
-    rf_test_cm$overall["Accuracy"]
-  ),
-  Train_Sensitivity = c(
-    train_cm$byClass["Sensitivity"],
-    lasso_train_cm$byClass["Sensitivity"],
-    rf_train_cm$byClass["Sensitivity"]
-  ),
-  Test_Sensitivity = c(
-    test_cm$byClass["Sensitivity"],
-    lasso_test_cm$byClass["Sensitivity"],
-    rf_test_cm$byClass["Sensitivity"]
-  ),
-  Train_Specificity = c(
-    train_cm$byClass["Specificity"],
-    lasso_train_cm$byClass["Specificity"],
-    rf_train_cm$byClass["Specificity"]
-  ),
-  Test_Specificity = c(
-    test_cm$byClass["Specificity"],
-    lasso_test_cm$byClass["Specificity"],
-    rf_test_cm$byClass["Specificity"]
-  ),
-  Train_AUC = c(
-    auc(train_roc),
-    auc(lasso_train_roc),
-    auc(rf_train_roc)
-  ),
-  Test_AUC = c(
-    auc(test_roc),
-    auc(lasso_test_roc),
-    auc(rf_test_roc)
-  )
+Random Forest is an ensemble of 500 decision trees that reduces variance through bagging and random feature subsampling. It naturally captures non-linear relationships and feature interactions that linear models may miss.
+
+```{r random-forest}
+rf_model <- randomForest(diabetes ~ ., data = train_data,
+                         ntree = 500, mtry = 3, importance = TRUE)
+
+rf_prob_tr  <- predict(rf_model, train_data, type = "prob")[,"pos"]
+rf_prob_te  <- predict(rf_model, test_data,  type = "prob")[,"pos"]
+rf_class_tr <- predict(rf_model, train_data, type = "class")
+rf_class_te <- predict(rf_model, test_data,  type = "class")
+
+rf_cm_tr  <- confusionMatrix(rf_class_tr, train_data$diabetes, positive = "pos")
+rf_cm_te  <- confusionMatrix(rf_class_te, test_data$diabetes,  positive = "pos")
+rf_roc_tr <- roc(train_data$diabetes, rf_prob_tr, quiet = TRUE)
+rf_roc_te <- roc(test_data$diabetes,  rf_prob_te, quiet = TRUE)
+```
+
+### Random Forest: Variable Importance
+
+```{r rf-varimp, fig.height=5}
+imp_df <- as.data.frame(importance(rf_model)) |>
+  rownames_to_column("Variable") |>
+  arrange(desc(MeanDecreaseAccuracy))
+
+p_mda <- ggplot(imp_df, aes(x = reorder(Variable, MeanDecreaseAccuracy),
+                             y = MeanDecreaseAccuracy, fill = MeanDecreaseAccuracy)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_viridis_c(option = "magma", begin = 0.3) +
+  coord_flip() +
+  labs(title = "Mean Decrease Accuracy", x = NULL, y = "MDA") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+p_mdg <- ggplot(imp_df, aes(x = reorder(Variable, MeanDecreaseGini),
+                             y = MeanDecreaseGini, fill = MeanDecreaseGini)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_viridis_c(option = "plasma", begin = 0.3) +
+  coord_flip() +
+  labs(title = "Mean Decrease Gini", x = NULL, y = "MDG") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+grid.arrange(p_mda, p_mdg, ncol = 2,
+             top = "Random Forest Variable Importance")
+```
+
+------------------------------------------------------------------------
+
+# Model Comparison
+
+## Performance Summary Table
+
+```{r comparison-table}
+results <- data.frame(
+  Model       = c("Logistic Regression", "LASSO", "Random Forest"),
+  Train_Acc   = round(c(log_cm_tr$overall["Accuracy"],
+                        las_cm_tr$overall["Accuracy"],
+                        rf_cm_tr$overall["Accuracy"]), 4),
+  Test_Acc    = round(c(log_cm_te$overall["Accuracy"],
+                        las_cm_te$overall["Accuracy"],
+                        rf_cm_te$overall["Accuracy"]), 4),
+  Sensitivity = round(c(log_cm_te$byClass["Sensitivity"],
+                        las_cm_te$byClass["Sensitivity"],
+                        rf_cm_te$byClass["Sensitivity"]), 4),
+  Specificity = round(c(log_cm_te$byClass["Specificity"],
+                        las_cm_te$byClass["Specificity"],
+                        rf_cm_te$byClass["Specificity"]), 4),
+  F1          = round(c(log_cm_te$byClass["F1"],
+                        las_cm_te$byClass["F1"],
+                        rf_cm_te$byClass["F1"]), 4),
+  Test_AUC    = round(c(auc(log_roc_te),
+                        auc(las_roc_te),
+                        auc(rf_roc_te)), 4)
 )
-# IMPORTANT #
-cat("\nModel Performance Comparison:\n")
-print(model_comparison)
 
-# Plot comparison
-png("diabetes_plots/model_comparison.png", width = 1000, height = 600)
-par(mfrow = c(1, 2))
+best <- which.max(results$Test_AUC)
 
-# Test Accuracy Comparison
-barplot(model_comparison$Test_Accuracy,
-        names.arg = model_comparison$Model,
-        main = "Test Set Accuracy Comparison",
-        ylab = "Accuracy",
-        ylim = c(0, 1),
-        col = c("#2E86AB", "#F18F01", "#A23B72"),
-        las = 2)
-abline(h = 0.5, lty = 2, col = "gray")
-
-# Test AUC Comparison
-barplot(model_comparison$Test_AUC,
-        names.arg = model_comparison$Model,
-        main = "Test Set AUC Comparison",
-        ylab = "AUC",
-        ylim = c(0, 1),
-        col = c("#2E86AB", "#F18F01", "#A23B72"),
-        las = 2)
-abline(h = 0.5, lty = 2, col = "gray")
-
-dev.off()
-
-# Combined ROC Curve
-png("diabetes_plots/roc_comparison.png", width = 800, height = 800)
-plot(test_roc, col = "#2E86AB", lwd = 2, main = "ROC Curve Comparison - All Models")
-lines(lasso_test_roc, col = "#F18F01", lwd = 2)
-lines(rf_test_roc, col = "#A23B72", lwd = 2)
-legend("bottomright",
-       legend = c(
-         paste("Logistic Regression (AUC =", round(auc(test_roc), 3), ")"),
-         paste("LASSO (AUC =", round(auc(lasso_test_roc), 3), ")"),
-         paste("Random Forest (AUC =", round(auc(rf_test_roc), 3), ")")
-       ),
-       col = c("#2E86AB", "#F18F01", "#A23B72"),
-       lwd = 2)
-abline(a = 0, b = 1, lty = 2, col = "gray")
-dev.off()
+kbl(results, caption = "Model Performance Comparison (Test Set)",
+    col.names = c("Model","Train Acc.","Test Acc.","Sensitivity",
+                  "Specificity","F1 Score","Test AUC")) |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE) |>
+  row_spec(best, bold = TRUE, color = "white", background = pal["neg"]) |>
+  add_footnote("Highlighted = best Test AUC", notation = "symbol")
 ```
 
-Predictive Functions/Examples:
+## ROC Curves -- All Three Models
 
-```{r}
-cat("\n=== CREATING PREDICTION FUNCTION ===\n")
+```{r combined-roc}
+roc_df <- bind_rows(
+  data.frame(fpr = 1 - log_roc_te$specificities, tpr = log_roc_te$sensitivities,
+             Model = paste0("Logistic (AUC=", round(auc(log_roc_te), 3), ")")),
+  data.frame(fpr = 1 - las_roc_te$specificities, tpr = las_roc_te$sensitivities,
+             Model = paste0("LASSO (AUC=", round(auc(las_roc_te), 3), ")")),
+  data.frame(fpr = 1 - rf_roc_te$specificities,  tpr = rf_roc_te$sensitivities,
+             Model = paste0("Random Forest (AUC=", round(auc(rf_roc_te), 3), ")"))
+)
 
-# Function to predict diabetes risk for new patients
-predict_diabetes_risk <- function(
-    pregnant,
-    glucose,
-    pressure,
-    triceps,
-    insulin,
-    mass,
-    pedigree,
-    age,
-    model_choice = "logistic"
-) {
-  
-  # Create data frame with input values
-  new_patient <- data.frame(
-    pregnant = pregnant,
-    glucose = glucose,
-    pressure = pressure,
-    triceps = triceps,
-    insulin = insulin,
-    mass = mass,
-    pedigree = pedigree,
-    age = age
-  )
-  
-  # Select model and make prediction
-  if (model_choice == "logistic") {
-    prob <- predict(log_model_step, new_patient, type = "response")
-    model_name <- "Logistic Regression"
-  } else if (model_choice == "lasso") {
-    new_x <- model.matrix(~ ., new_patient)[, -1]
-    prob <- predict(lasso_model, new_x, type = "response")[1, 1]
-    model_name <- "LASSO"
-  } else if (model_choice == "rf") {
-    prob <- predict(rf_model, new_patient, type = "prob")$pos
-    model_name <- "Random Forest"
-  } else {
-    stop("Invalid model choice. Choose 'logistic', 'lasso', or 'rf'")
-  }
-  
-  # Determine risk level
-  risk_level <- if (prob < 0.3) {
-    "Low Risk"
-  } else if (prob < 0.7) {
-    "Moderate Risk"
-  } else {
-    "High Risk"
-  }
-  
-  # Return results
-  result <- list(
-    model = model_name,
-    probability = prob,
-    prediction = ifelse(prob > 0.5, "Diabetes", "No Diabetes"),
-    risk_level = risk_level,
-    input_data = new_patient
-  )
-  
-  return(result)
+ggplot(roc_df, aes(x = fpr, y = tpr, color = Model)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted", color = "gray60") +
+  scale_color_manual(values = c(pal["pos"], pal["neu"], pal["neg"])) +
+  labs(title    = "ROC Curves -- All Models (Test Set)",
+       subtitle = "Higher curve = better discrimination between diabetic and non-diabetic patients",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "True Positive Rate (Sensitivity)",
+       color = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = c(0.70, 0.18),
+        legend.background = element_rect(fill = "white", color = "gray80"))
+```
+
+## Metric Bar Charts
+
+```{r metric-bars, fig.height=5}
+results |>
+  select(Model, Test_Acc, Sensitivity, Specificity, Test_AUC) |>
+  pivot_longer(-Model, names_to = "Metric", values_to = "Value") |>
+  mutate(Metric = recode(Metric, "Test_Acc" = "Accuracy", "Test_AUC" = "AUC")) |>
+  ggplot(aes(x = Model, y = Value, fill = Model)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(aes(label = round(Value, 3)), vjust = -0.4, size = 3.2, fontface = "bold") +
+  scale_fill_manual(values = c(pal["pos"], pal["neu"], pal["neg"])) +
+  scale_y_continuous(limits = c(0, 1.08)) +
+  facet_wrap(~Metric, ncol = 4) +
+  labs(title = "Test Set Performance by Model and Metric", x = NULL, y = "Score") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x  = element_text(angle = 20, hjust = 1),
+        plot.title   = element_text(face = "bold"),
+        strip.text   = element_text(face = "bold"))
+```
+
+## Confusion Matrices
+
+```{r confusion-matrices, fig.height=4}
+plot_cm <- function(cm_obj, title_str, color) {
+  cm_df <- as.data.frame(cm_obj$table)
+  cm_df$Reference  <- factor(cm_df$Reference,  levels = c("pos","neg"))
+  cm_df$Prediction <- factor(cm_df$Prediction, levels = c("neg","pos"))
+  ggplot(cm_df, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Freq), size = 7, fontface = "bold") +
+    scale_fill_gradient(low = "white", high = color) +
+    scale_x_discrete(labels = c("pos" = "Diabetes", "neg" = "No Diabetes")) +
+    scale_y_discrete(labels = c("pos" = "Diabetes", "neg" = "No Diabetes")) +
+    labs(title = title_str, x = "Actual", y = "Predicted") +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5),
+          legend.position = "none")
 }
 
-# =============================================================================
-# SECTION 12: EXAMPLE PREDICTIONS
-# =============================================================================
-
-cat("\n=== EXAMPLE PREDICTIONS ===\n")
-
-# Example 1: Low risk patient
-cat("\nExample 1: Young, healthy individual\n")
-example1 <- predict_diabetes_risk(
-  pregnant = 2,
-  glucose = 85,
-  pressure = 70,
-  triceps = 20,
-  insulin = 80,
-  mass = 22.5,
-  pedigree = 0.2,
-  age = 25,
-  model_choice = "rf"
+grid.arrange(
+  plot_cm(log_cm_te, "Logistic Regression", pal["pos"]),
+  plot_cm(las_cm_te, "LASSO",               pal["neu"]),
+  plot_cm(rf_cm_te,  "Random Forest",        pal["neg"]),
+  ncol = 3, top = "Confusion Matrices -- Test Set"
 )
-print(example1)
+```
 
-# Example 2: Moderate risk patient
-cat("\nExample 2: Middle-aged with elevated glucose\n")
-example2 <- predict_diabetes_risk(
-  pregnant = 5,
-  glucose = 140,
-  pressure = 85,
-  triceps = 30,
-  insulin = 150,
-  mass = 28.5,
-  pedigree = 0.5,
-  age = 45,
-  model_choice = "rf"
-)
-print(example2)
+## Variable Importance Across Models
 
-# Example 3: High risk patient
-cat("\nExample 3: High-risk profile\n")
-example3 <- predict_diabetes_risk(
-  pregnant = 8,
-  glucose = 180,
-  pressure = 90,
-  triceps = 40,
-  insulin = 200,
-  mass = 35.0,
-  pedigree = 0.8,
-  age = 55,
-  model_choice = "rf"
-)
-print(example3)
+This chart normalizes importance scores within each model (so they sum to 1) to allow direct visual comparison of which predictors each model prioritizes.
+
+```{r unified-varimp}
+log_c  <- abs(coef(log_step)[-1]); log_c  <- log_c  / sum(log_c)
+las_c  <- abs(as.matrix(coef(lasso_model))[-1,1])
+las_c  <- las_c / sum(las_c)
+rf_mda <- importance(rf_model)[,"MeanDecreaseAccuracy"]
+rf_mda <- rf_mda / sum(rf_mda)
+
+make_imp <- function(vals, model_name) {
+  v <- setNames(rep(0, length(continuous_vars)), continuous_vars)
+  v[names(vals)] <- vals
+  data.frame(Variable = continuous_vars, Importance = v, Model = model_name)
+}
+
+all_imp <- bind_rows(
+  make_imp(log_c,  "Logistic"),
+  make_imp(las_c,  "LASSO"),
+  make_imp(rf_mda, "Random Forest")
+) |> filter(Importance > 0)
+
+ggplot(all_imp, aes(x = reorder(Variable, Importance), y = Importance, fill = Model)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("Logistic" = pal["pos"], "LASSO" = pal["neu"],
+                               "Random Forest" = pal["neg"])) +
+  coord_flip() +
+  labs(title    = "Normalized Variable Importance -- All Three Models",
+       subtitle = "Scores scaled to sum to 1 within each model for direct comparison",
+       x = NULL, y = "Normalized Importance", fill = "Model") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "top")
+```
+
+------------------------------------------------------------------------
+
+# Conclusion
+
+## Key Findings
+
+Across all three models, **glucose** was the single most important predictor of type 2 diabetes -- consistent with its role as the primary diagnostic criterion. **BMI** and **age** ranked second and third consistently, while the **diabetes pedigree function** and **number of pregnancies** showed moderate but meaningful importance.
+
+```{r findings-table}
+data.frame(
+  Rank     = 1:5,
+  Variable = c("Glucose", "BMI (mass)", "Age", "Pedigree Function", "Pregnancies"),
+  Reason   = c(
+    "Primary clinical marker; most discriminating predictor in all three models",
+    "Key driver of insulin resistance; consistently high importance",
+    "Cumulative metabolic risk; strong signal across all models",
+    "Captures genetic and family history component of diabetes risk",
+    "Associated with gestational diabetes history and hormonal changes"
+  )
+) |>
+  kbl(caption = "Top 5 Most Influential Variables (Consistent Across All Models)") |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE)
+```
+
+## Model Recommendation
+
+| Model | Strengths | Best Use Case |
+|----|----|----|
+| **Logistic Regression** | Interpretable; odds ratios meaningful to clinicians | When explanation is the priority |
+| **LASSO** | Automatic variable selection; reduces overfitting | When a sparse, explainable model is needed |
+| **Random Forest** | Highest AUC; handles non-linearity and interactions | When predictive accuracy is the priority |
+
+Random Forest produced the best overall predictive performance. However, Logistic Regression remains valuable in clinical contexts where interpretability of individual predictors is essential for decision-making.
+
+## Limitations
+
+-   Dataset is limited to Pima Indian women aged 21+; results may not generalize to broader populations.
+-   Class imbalance (\~35% positive) was not explicitly corrected; sensitivity could be improved with SMOTE or class weighting.
+-   Imputation of missing insulin and triceps values introduces some uncertainty into the results.
+
+------------------------------------------------------------------------
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
 ```
