@@ -52,7 +52,9 @@ for (pkg in required_packages) {
 }
 
 # Color palette
-pal <- c(neg = "#2E86AB", pos = "#A23B72", neu = "#F18F01")
+palette_neg <- "#2E86AB"   # Blue  – No Diabetes
+palette_pos <- "#A23B72"   # Purple – Diabetes
+palette_neu <- "#F18F01"   # Orange – neutral / third element
 ```
 
 ------------------------------------------------------------------------
@@ -98,7 +100,7 @@ diabetes |>
   mutate(Outcome = ifelse(diabetes == "neg", "No Diabetes", "Diabetes")) |>
   ggplot(aes(x = Value, fill = Outcome)) +
   geom_density(alpha = 0.65) +
-  scale_fill_manual(values = c("No Diabetes" = pal["neg"], "Diabetes" = pal["pos"])) +
+  scale_fill_manual(values = c("No Diabetes" = palette_neg, "Diabetes" = palette_pos)) +
   facet_wrap(~Variable, scales = "free", ncol = 2) +
   labs(title = "Predictor Distributions by Diabetes Status",
        x = NULL, y = "Density", fill = NULL) +
@@ -117,7 +119,7 @@ bp_list <- mapply(function(v, lab) {
   ggplot(diabetes, aes_string(x = "diabetes", y = v, fill = "diabetes")) +
     geom_boxplot(notch = TRUE, outlier.alpha = 0.4, show.legend = FALSE) +
     scale_x_discrete(labels = c("neg" = "No Diabetes", "pos" = "Diabetes")) +
-    scale_fill_manual(values = c("neg" = pal["neg"], "pos" = pal["pos"])) +
+    scale_fill_manual(values = c("neg" = palette_neg, "pos" = palette_pos)) +
     labs(title = lab, x = NULL, y = NULL) +
     theme_minimal(base_size = 11) +
     theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 10))
@@ -140,7 +142,7 @@ cor_melt <- diabetes |>
 ggplot(cor_melt, aes(x = Var1, y = Var2, fill = value)) +
   geom_tile(color = "white") +
   geom_text(aes(label = round(value, 2)), size = 3, fontface = "bold") +
-  scale_fill_gradient2(low = pal["neg"], mid = "white", high = pal["pos"],
+  scale_fill_gradient2(low = palette_neg, mid = "white", high = palette_pos,
                        midpoint = 0, limits = c(-1, 1), name = "r") +
   labs(title = "Predictor Correlation Matrix", x = NULL, y = NULL) +
   theme_minimal(base_size = 11) +
@@ -207,13 +209,13 @@ kbl(or_df, caption = "Logistic Regression: Odds Ratios with 95% CI",
     col.names = c("Variable","OR","Lower CI","Upper CI")) |>
   kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE) |>
   row_spec(which(or_df$OR > 1 & or_df$CI_Lo > 1), bold = TRUE,
-           color = "white", background = pal["pos"])
+           color = "white", background = palette_pos)
 
 ggplot(or_df, aes(x = reorder(Variable, OR), y = OR,
                   ymin = CI_Lo, ymax = CI_Hi, color = OR > 1)) +
   geom_pointrange(size = 0.9, linewidth = 1) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
-  scale_color_manual(values = c("FALSE" = pal["neg"], "TRUE" = pal["pos"]),
+  scale_color_manual(values = c("FALSE" = palette_neg, "TRUE" = palette_pos),
                      labels = c("No/Neutral Effect", "Increased Risk"), name = NULL) +
   coord_flip() +
   labs(title    = "Logistic Regression: Odds Ratios with 95% CI",
@@ -261,7 +263,7 @@ las_coef_df <- data.frame(
 
 ggplot(las_coef_df, aes(x = reorder(Variable, abs(Coef)), y = Coef, fill = Coef > 0)) +
   geom_col(show.legend = FALSE) +
-  scale_fill_manual(values = c("FALSE" = pal["neg"], "TRUE" = pal["pos"])) +
+  scale_fill_manual(values = c("FALSE" = palette_neg, "TRUE" = palette_pos)) +
   coord_flip() +
   labs(title    = "LASSO: Non-Zero Coefficients After Penalization",
        subtitle = "Purple = increases risk; Blue = decreases risk; absent = shrunk to zero",
@@ -355,7 +357,7 @@ kbl(results, caption = "Model Performance Comparison (Test Set)",
     col.names = c("Model","Train Acc.","Test Acc.","Sensitivity",
                   "Specificity","F1 Score","Test AUC")) |>
   kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE) |>
-  row_spec(best, bold = TRUE, color = "white", background = pal["neg"]) |>
+  row_spec(best, bold = TRUE, color = "white", background = palette_neg) |>
   add_footnote("Highlighted = best Test AUC", notation = "symbol")
 ```
 
@@ -374,7 +376,7 @@ roc_df <- bind_rows(
 ggplot(roc_df, aes(x = fpr, y = tpr, color = Model)) +
   geom_line(linewidth = 1.2) +
   geom_abline(slope = 1, intercept = 0, linetype = "dotted", color = "gray60") +
-  scale_color_manual(values = c(pal["pos"], pal["neu"], pal["neg"])) +
+  scale_color_manual(values = c(palette_neg, palette_pos, palette_neu)) +
   labs(title    = "ROC Curves -- All Models (Test Set)",
        subtitle = "Higher curve = better discrimination between diabetic and non-diabetic patients",
        x = "False Positive Rate (1 - Specificity)",
@@ -396,7 +398,7 @@ results |>
   ggplot(aes(x = Model, y = Value, fill = Model)) +
   geom_col(width = 0.6, show.legend = FALSE) +
   geom_text(aes(label = round(Value, 3)), vjust = -0.4, size = 3.2, fontface = "bold") +
-  scale_fill_manual(values = c(pal["pos"], pal["neu"], pal["neg"])) +
+  scale_fill_manual(values = c(palette_pos, palette_neu, palette_neg)) +
   scale_y_continuous(limits = c(0, 1.08)) +
   facet_wrap(~Metric, ncol = 4) +
   labs(title = "Test Set Performance by Model and Metric", x = NULL, y = "Score") +
@@ -426,9 +428,9 @@ plot_cm <- function(cm_obj, title_str, color) {
 }
 
 grid.arrange(
-  plot_cm(log_cm_te, "Logistic Regression", pal["pos"]),
-  plot_cm(las_cm_te, "LASSO",               pal["neu"]),
-  plot_cm(rf_cm_te,  "Random Forest",        pal["neg"]),
+  plot_cm(log_cm_te, "Logistic Regression", palette_pos),
+  plot_cm(las_cm_te, "LASSO",               palette_neu),
+  plot_cm(rf_cm_te,  "Random Forest",        palette_neg),
   ncol = 3, top = "Confusion Matrices -- Test Set"
 )
 ```
@@ -458,8 +460,8 @@ all_imp <- bind_rows(
 
 ggplot(all_imp, aes(x = reorder(Variable, Importance), y = Importance, fill = Model)) +
   geom_col(position = "dodge") +
-  scale_fill_manual(values = c("Logistic" = pal["pos"], "LASSO" = pal["neu"],
-                               "Random Forest" = pal["neg"])) +
+  scale_fill_manual(values = c("Logistic" = palette_pos, "LASSO" = palette_neu,
+                               "Random Forest" = palette_neg)) +
   coord_flip() +
   labs(title    = "Normalized Variable Importance -- All Three Models",
        subtitle = "Scores scaled to sum to 1 within each model for direct comparison",
@@ -495,7 +497,7 @@ data.frame(
 ## Model Recommendation
 
 | Model | Strengths | Best Use Case |
-|----|----|----|
+|------------------------|------------------------|------------------------|
 | **Logistic Regression** | Interpretable; odds ratios meaningful to clinicians | When explanation is the priority |
 | **LASSO** | Automatic variable selection; reduces overfitting | When a sparse, explainable model is needed |
 | **Random Forest** | Highest AUC; handles non-linearity and interactions | When predictive accuracy is the priority |
