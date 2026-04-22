@@ -51,7 +51,7 @@ for (pkg in required_packages) {
 # Color palette
 palette_neg <- "#2E86AB"   # Blue  – No Diabetes
 palette_pos <- "#A23B72"   # Purple – Diabetes
-palette_neu <- "#F18F01"   # Orange – neutral / third element
+palette_neu <- "#F18F01"   # Orange – neutral
 ```
 
 ------------------------------------------------------------------------
@@ -192,35 +192,6 @@ log_roc_te <- roc(test_data$diabetes,  log_prob_te, quiet = TRUE)
 ### Odds Ratios
 
 Variables with OR \> 1 and a confidence interval that does not cross 1 are statistically significant risk factors.
-
-```{r odds-ratios}
-or_df <- data.frame(
-  Variable = names(coef(log_step)),
-  OR       = exp(coef(log_step)),
-  CI_Lo    = exp(confint.default(log_step)[,1]),
-  CI_Hi    = exp(confint.default(log_step)[,2])
-) |> filter(Variable != "(Intercept)") |>
-  mutate(across(where(is.numeric), ~round(., 3)))
-
-kbl(or_df, caption = "Logistic Regression: Odds Ratios with 95% CI",
-    col.names = c("Variable","OR","Lower CI","Upper CI")) |>
-  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE) |>
-  row_spec(which(or_df$OR > 1 & or_df$CI_Lo > 1), bold = TRUE,
-           color = "white", background = palette_pos)
-
-ggplot(or_df, aes(x = reorder(Variable, OR), y = OR,
-                  ymin = CI_Lo, ymax = CI_Hi, color = OR > 1)) +
-  geom_pointrange(size = 0.9, linewidth = 1) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
-  scale_color_manual(values = c("FALSE" = palette_neg, "TRUE" = palette_pos),
-                     labels = c("No/Neutral Effect", "Increased Risk"), name = NULL) +
-  coord_flip() +
-  labs(title    = "Logistic Regression: Odds Ratios with 95% CI",
-       subtitle = "Purple = statistically significant risk factor (OR > 1, CI excludes 1)",
-       x = NULL, y = "Odds Ratio") +
-  theme_minimal(base_size = 13) +
-  theme(plot.title = element_text(face = "bold"), legend.position = "top")
-```
 
 ------------------------------------------------------------------------
 
