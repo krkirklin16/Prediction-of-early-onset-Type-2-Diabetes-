@@ -35,7 +35,7 @@ Type 2 diabetes is a major global health burden, affecting over 500 million peop
 
 ```{r packages}
 rm(list = ls())
-set.seed(10)
+set.seed(123)
 
 required_packages <- c(
   "tidyverse", "mlbench", "caret", "pROC",
@@ -194,7 +194,32 @@ log_roc_te <- roc(test_data$diabetes,  log_prob_te, quiet = TRUE)
 Variables with OR \> 1 and a confidence interval that does not cross 1 are statistically significant risk factors.
 
 ```{r odds-ratios}
+or_df <- data.frame(
+  Variable = names(coef(log_step)),
+  OR       = exp(coef(log_step)),
+  CI_Lo    = exp(confint.default(log_step)[,1]),
+  CI_Hi    = exp(confint.default(log_step)[,2])
+) |> filter(Variable != "(Intercept)") |>
+  mutate(across(where(is.numeric), ~round(., 3)))
 
+kbl(or_df, caption = "Logistic Regression: Odds Ratios with 95% CI",
+    col.names = c("Variable","OR","Lower CI","Upper CI")) |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE) |>
+  row_spec(which(or_df$OR > 1 & or_df$CI_Lo > 1), bold = TRUE,
+           color = "white", background = palette_pos)
+
+ggplot(or_df, aes(x = reorder(Variable, OR), y = OR,
+                  ymin = CI_Lo, ymax = CI_Hi, color = OR > 1)) +
+  geom_pointrange(size = 0.9, linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("FALSE" = palette_neg, "TRUE" = palette_pos),
+                     labels = c("No/Neutral Effect", "Increased Risk"), name = NULL) +
+  coord_flip() +
+  labs(title    = "Logistic Regression: Odds Ratios with 95% CI",
+       subtitle = "Purple = statistically significant risk factor (OR > 1, CI excludes 1)",
+       x = NULL, y = "Odds Ratio") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"), legend.position = "top")
 ```
 
 ------------------------------------------------------------------------
@@ -412,15 +437,27 @@ grid.arrange(
 This chart normalizes importance scores within each model (so they sum to 1) to allow direct visual comparison of which predictors each model prioritizes.
 
 ```{r unified-varimp}
-log_c  <- abs(coef(log_step)[-1]); log_c  <- log_c  / sum(log_c)
-las_c  <- abs(as.matrix(coef(lasso_model))[-1,1])
-las_c  <- las_c / sum(las_c)
+# Refit Logistic and LASSO on standardized predictors for fair importance comparison
+# (original models kept intact for odds ratios and predictions)
+train_scaled <- train_data
+train_scaled[continuous_vars] <- scale(train_data[continuous_vars])
+
+log_scaled <- glm(formula(log_step), data = train_scaled, family = binomial)
+
+x_tr_sc <- model.matrix(diabetes ~ ., train_scaled)[,-1]
+las_scaled <- glmnet(x_tr_sc, y_tr, alpha = 1, family = "binomial",
+                     lambda = cv_lasso$lambda.min)
+
+# Standardized importance -- now comparable across variables
+log_c <- abs(coef(log_scaled)[-1]);          log_c <- log_c / sum(log_c)
+las_c <- abs(as.matrix(coef(las_scaled))[-1, 1])
+las_c <- las_c[las_c != 0];                  las_c <- las_c / sum(las_c)
 rf_mda <- importance(rf_model)[,"MeanDecreaseAccuracy"]
 rf_mda <- rf_mda / sum(rf_mda)
 
 make_imp <- function(vals, model_name) {
   v <- setNames(rep(0, length(continuous_vars)), continuous_vars)
-  v[names(vals)] <- vals
+  v[intersect(names(vals), continuous_vars)] <- vals[intersect(names(vals), continuous_vars)]
   data.frame(Variable = continuous_vars, Importance = v, Model = model_name)
 }
 
@@ -436,7 +473,7 @@ ggplot(all_imp, aes(x = reorder(Variable, Importance), y = Importance, fill = Mo
                                "Random Forest" = palette_neg)) +
   coord_flip() +
   labs(title    = "Normalized Variable Importance -- All Three Models",
-       subtitle = "Scores scaled to sum to 1 within each model for direct comparison",
+       subtitle = "Logistic/LASSO fit on standardized predictors for fair comparison",
        x = NULL, y = "Normalized Importance", fill = "Model") +
   theme_minimal(base_size = 13) +
   theme(plot.title = element_text(face = "bold"), legend.position = "top")
